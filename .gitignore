@@ -1,0 +1,23 @@
+# 模型文件（自动下载，无需提交）
+*.pt
+
+# 用户上传的视频
+input.mp4
+output_processed.mp4
+
+# 分析输出
+swing_data.csv
+swing_report.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
