@@ -53,7 +53,7 @@ if uploaded_file:
 
         # 构造命令：通过 --headless 运行分析
         cmd = [
-            sys.executable, "pose_test.py",
+            sys.executable, "pose_mediapipe.py",
             "--input", input_path,
             "--output", output_video,
             "--csv", output_csv,
