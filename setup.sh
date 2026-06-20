@@ -1,6 +1,13 @@
 #!/bin/bash
-# Streamlit Cloud 部署前置脚本
-# 如果 requirements.txt 中的 --extra-index-url 未生效，此脚本作为备选
+set -e  # 任何命令失败立即退出
 
+echo "===== 安装 CPU 版 PyTorch ====="
 pip install --no-cache-dir torch --extra-index-url https://download.pytorch.org/whl/cpu
+
+echo "===== 安装 ultralytics ====="
 pip install --no-cache-dir ultralytics
+
+echo "===== 安装 opencv ====="
+pip install --no-cache-dir opencv-python-headless
+
+echo "===== 安装完成 ====="
