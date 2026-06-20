@@ -6,9 +6,10 @@ import numpy as np
 import csv
 import json
 import argparse
+import traceback
 
 # ==================== 配置 ====================
-IS_LEFT_HANDED = True   # True=左手持拍, False=右手持拍
+IS_LEFT_HANDED = True
 
 # MediaPipe Pose 关键点索引
 # 左臂: 11(肩) 13(肘) 15(腕)   右臂: 12(肩) 14(肘) 16(腕)
@@ -19,7 +20,6 @@ else:
     SHOULDER_IDX, ELBOW_IDX, WRIST_IDX = 12, 14, 16
     SIDE_LABEL = "右手"
 
-# 环境变量可覆盖默认值
 if os.environ.get("BADMINTON_LEFT_HANDED") == "1":
     SHOULDER_IDX, ELBOW_IDX, WRIST_IDX = 11, 13, 15
     SIDE_LABEL = "左手"
@@ -57,7 +57,7 @@ def draw_arm_skeleton(frame, sx, sy, ex, ey, wx, wy,
                       c_shoulder, c_elbow, c_wrist, color, thickness=3, min_conf=0.3):
     for name, c in [("肩", c_shoulder), ("肘", c_elbow), ("腕", c_wrist)]:
         if c < min_conf:
-            print(f"  [Skip] {SIDE_LABEL}{name} 可见度={c:.2f} < {min_conf}，不绘制")
+            print(f"  [Skip] {SIDE_LABEL}{name} 可见度={c:.2f} < {min_conf}")
 
     if c_shoulder >= min_conf and c_elbow >= min_conf:
         if DEBUG:
@@ -130,9 +130,7 @@ def generate_report(frames_data, phases, impact_idx, impact_vel):
     ]
     max_backswing = max(backswing_angles) if backswing_angles else 0
     backswing_verdict = "优秀" if max_backswing > 150 else "建议增加挥拍幅度"
-
     impact_verdict = "高" if abs(impact_vel) > IMPACT_SPEED_THRESHOLD else "发力不足"
-
     follow_count = sum(1 for p in phases if p == 'follow_through')
     motion_verdict = "完整" if follow_count > 20 else "动作过早中断"
 
@@ -172,11 +170,11 @@ def save_csv(frames_data, phases, smoothed_wy, path):
 
 def main():
     parser = argparse.ArgumentParser(description="🏸 羽毛球 AI 挥拍分析 (MediaPipe)")
-    parser.add_argument("--input",  default="test_video.mp4",       help="输入视频路径")
-    parser.add_argument("--output", default="output_processed.mp4", help="输出标注视频路径")
-    parser.add_argument("--csv",    default="swing_data.csv",       help="CSV 输出路径")
-    parser.add_argument("--json",   default="swing_report.json",    help="JSON 报告路径")
-    parser.add_argument("--headless", action="store_true",          help="无 GUI 模式")
+    parser.add_argument("--input",  default="test_video.mp4")
+    parser.add_argument("--output", default="output_processed.mp4")
+    parser.add_argument("--csv",    default="swing_data.csv")
+    parser.add_argument("--json",   default="swing_report.json")
+    parser.add_argument("--headless", action="store_true")
     args = parser.parse_args()
 
     global OUTPUT_CSV, OUTPUT_JSON
@@ -185,7 +183,7 @@ def main():
 
     print(f"持拍手: {SIDE_LABEL}  |  挥拍区间: {SWING_ANGLE_MIN}° – {SWING_ANGLE_MAX}°")
     print(f"模式: {'Headless' if args.headless else 'GUI 实时显示'}")
-    print(f"输入视频: {args.input}")
+    print(f"输入: {args.input}")
 
     test_file = args.input
     if not os.path.exists(test_file):
@@ -196,24 +194,45 @@ def main():
     mp_pose = mp.solutions.pose
     pose = mp_pose.Pose(
         static_image_mode=False,
-        model_complexity=1,          # 1=平衡精度和速度
-        min_detection_confidence=0.5,
-        min_tracking_confidence=0.5,
+        model_complexity=1,
+        min_detection_confidence=0.3,
+        min_tracking_confidence=0.3,
     )
 
     cap = cv2.VideoCapture(test_file)
+    if not cap.isOpened():
+        print(f"错误: 无法打开视频 {test_file}")
+        pose.close()
+        return
+
     frame_count = 0
     frame_shape_printed = False
     frames_data = []
 
+    # Headless 模式：创建视频写入器
     out_writer = None
     if args.headless:
         fps = cap.get(cv2.CAP_PROP_FPS)
+        if fps <= 0:
+            fps = 30
         w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out_writer = cv2.VideoWriter(args.output, fourcc, fps, (w, h))
-        print(f"输出视频: {args.output}  ({w}x{h}, {fps:.1f} fps)")
+        # 尝试多种编码器
+        codec_ok = False
+        for codec in ['avc1', 'mp4v', 'XVID', 'MJPG']:
+            try:
+                fourcc = cv2.VideoWriter_fourcc(*codec)
+                out_writer = cv2.VideoWriter(args.output, fourcc, fps, (w, h))
+                if out_writer.isOpened():
+                    print(f"输出视频: {args.output}  ({w}x{h}, {fps:.1f}fps, {codec})")
+                    codec_ok = True
+                    break
+                out_writer.release()
+                out_writer = None
+            except Exception:
+                out_writer = None
+        if not codec_ok:
+            print("警告: 无法创建视频输出文件，将跳过视频保存")
 
     while cap.isOpened():
         success, frame = cap.read()
@@ -227,7 +246,7 @@ def main():
             print(f"Frame shape: {frame.shape}  (H={h_img}, W={w_img})")
             frame_shape_printed = True
 
-        # MediaPipe 推理（RGB 输入）
+        # MediaPipe 推理
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = pose.process(rgb)
 
@@ -237,7 +256,6 @@ def main():
         else:
             lm = results.pose_landmarks.landmark
 
-            # 提取关键点（归一化坐标 → 像素坐标）
             sx = lm[SHOULDER_IDX].x * w_img
             sy = lm[SHOULDER_IDX].y * h_img
             ex = lm[ELBOW_IDX].x   * w_img
@@ -259,15 +277,10 @@ def main():
             if not coords_ok:
                 print(f"[Frame {frame_count}] Warning: 含 (0,0) 无效坐标")
             elif sc > 0.3 and ec > 0.3 and wc > 0.3:
-                shoulder = (sx, sy)
-                elbow = (ex, ey)
-                wrist = (wx, wy)
-
-                angle = calc_elbow_angle(shoulder, elbow, wrist)
+                angle = calc_elbow_angle((sx, sy), (ex, ey), (wx, wy))
                 in_swing = SWING_ANGLE_MIN <= angle <= SWING_ANGLE_MAX
                 color = ARM_GREEN if in_swing else ARM_GREY
 
-                # 采集数据
                 frames_data.append({
                     'frame': frame_count,
                     'shoulder_x': sx, 'shoulder_y': sy,
@@ -276,7 +289,6 @@ def main():
                     'elbow_angle': angle,
                 })
 
-                # 绘制
                 draw_arm_skeleton(frame,
                     int(sx), int(sy), int(ex), int(ey), int(wx), int(wy),
                     sc, ec, wc, color)
@@ -290,9 +302,9 @@ def main():
                     cv2.putText(frame, "SWING!", (40, 55),
                                 cv2.FONT_HERSHEY_SIMPLEX, 1.3, (0, 255, 0), 3)
 
-        if args.headless:
+        if args.headless and out_writer is not None:
             out_writer.write(frame)
-        else:
+        elif not args.headless:
             cv2.imshow("Badminton AI (MediaPipe)", frame)
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
@@ -305,11 +317,10 @@ def main():
 
     # ========== 离线分析管线 ==========
     print("\n" + "=" * 50)
-    print("离线分析开始...")
-    print(f"共采集 {len(frames_data)} 帧有效数据")
+    print(f"离线分析: 共采集 {len(frames_data)} 帧")
 
     if len(frames_data) < MOVING_AVG_WINDOW:
-        print(f"警告: 有效帧数不足 {MOVING_AVG_WINDOW}，跳过分析")
+        print(f"有效帧数不足 {MOVING_AVG_WINDOW}，跳过分析")
     else:
         raw_wrist_y = [fd['wrist_y'] for fd in frames_data]
         smoothed_wy = moving_average(raw_wrist_y, MOVING_AVG_WINDOW)
@@ -321,14 +332,13 @@ def main():
         report = generate_report(frames_data, phases, impact_idx, impact_vel)
 
         save_csv(frames_data, phases, smoothed_wy, OUTPUT_CSV)
-        print(f"CSV 已保存: {OUTPUT_CSV}")
+        print(f"CSV: {OUTPUT_CSV}")
 
         with open(OUTPUT_JSON, 'w', encoding='utf-8') as f:
             json.dump(report, f, ensure_ascii=False, indent=2)
-        print(f"JSON 报告已保存: {OUTPUT_JSON}")
+        print(f"JSON: {OUTPUT_JSON}")
 
         print("-" * 40)
-        print("挥拍分析报告")
         print(f"  蓄力评估:    {report['蓄力评估']}")
         print(f"  击球爆发力:  {report['击球爆发力']}")
         print(f"  动作连贯性:  {report['动作连贯性']}")
