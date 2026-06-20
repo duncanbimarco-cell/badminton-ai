@@ -1,3 +1,5 @@
-libgl1-mesa-glx
+libgl1
+libopengl0
+libglx0
 libglib2.0-0
 libgomp1
